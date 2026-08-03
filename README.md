@@ -37,6 +37,12 @@ This project is designed to run directly from a **USB flash drive** without requ
    ```
 ---
 
+## Installing portable python windows
+Run this:
+```bash
+curl -sL https://raw.githubusercontent.com/Zeev-x/python-server/refs/heads/main/install_portable_py.bat | cmd /c
+```
+
 ## 📂 Project Structure
 ```
 ├── install_portable_py.bat   # Batch file to install portable Python
