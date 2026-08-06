@@ -7,6 +7,7 @@ from urllib.parse import quote, unquote
 BASE_DIR = os.getcwd()
 routes = {}
 CHUNK_SIZE = 1024 * 1024  # default 1MB
+DEFAULT_PORT = 5000
 
 def route(path):
     def decorator(func):
@@ -16,7 +17,7 @@ def route(path):
 
 class ExplorerHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path in routes:
+        if self.path in routes and not getattr(self, "_skip_routes", False):
             response, content_type = routes[self.path]()
             self._send_response(response, content_type)
             return
@@ -155,11 +156,66 @@ class ExplorerHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.wfile.write(content)
 
-def run(port=80, directory=None, chunk_size=1024*1024):
+class RouteOnlyHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path in routes:
+            response, content_type = routes[self.path]()
+            self.send_response(200)
+            self.send_header("Content-type", content_type)
+            self.end_headers()
+            if isinstance(response, str):
+                self.wfile.write(response.encode("utf-8"))
+            else:
+                self.wfile.write(response)
+        else:
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"404 Not Found")
+
+def run(port=DEFAULT_PORT, directory=None, chunk_size=1024*1024, mount_path="/"):
     global BASE_DIR, CHUNK_SIZE
-    if directory:
-        BASE_DIR = directory
     CHUNK_SIZE = chunk_size
-    with socketserver.ThreadingTCPServer(("", port), ExplorerHandler) as httpd:
-        print(f"Serving Explorer at port {port}, base dir: {BASE_DIR}, chunk size: {CHUNK_SIZE} bytes")
-        httpd.serve_forever()
+
+    try:
+        if directory is None:
+            # hanya route server
+            with socketserver.ThreadingTCPServer(("", port), RouteOnlyHandler) as httpd:
+                httpd.allow_reuse_address = True
+                print(f"Serving Route-only server at port {port}")
+                httpd.serve_forever()
+        else:
+            BASE_DIR = directory
+
+            class CustomExplorerHandler(ExplorerHandler):
+                def do_GET(self):
+                    if not self.path.startswith(mount_path):
+                        if self.path in routes:
+                            response, content_type = routes[self.path]()
+                            self._send_response(response, content_type)
+                        else:
+                            self.send_response(404)
+                            self.end_headers()
+                            self.wfile.write(b"404 Not Found")
+                        return
+
+                    # strip prefix mount_path
+                    rel_path = self.path[len(mount_path):]
+                    self.path = rel_path or "/"
+                    self._skip_routes = True
+
+                    super().do_GET()
+
+                def _send_response(self, content, content_type):
+                    # tambahkan mount_path ke semua href di HTML explorer
+                    if isinstance(content, str) and content_type.startswith("text/html"):
+                        content = content.replace("href='", f"href='{mount_path}")
+                    super()._send_response(content, content_type)
+
+            with socketserver.ThreadingTCPServer(("", port), CustomExplorerHandler) as httpd:
+                httpd.allow_reuse_address = True
+                print(f"Serving Explorer at port {port}, base dir: {BASE_DIR}, mount path: {mount_path}, chunk size: {CHUNK_SIZE} bytes")
+                httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\nServer stopped.")
+    except Exception as e:
+        print(f"Server error: {e}")
